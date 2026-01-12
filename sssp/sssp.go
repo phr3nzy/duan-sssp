@@ -46,6 +46,11 @@ type Solver struct {
 	Dist DistMap
 	K    int
 	T    int
+
+	// Pre-allocated buffers for performance
+	bufInt   []int
+	bufItem  []ds.Item
+	bufBatch []ds.Item
 }
 
 func NewSolver(g *graph.Graph) *Solver {
@@ -64,10 +69,13 @@ func NewSolver(g *graph.Graph) *Solver {
 	}
 
 	return &Solver{
-		G:    g,
-		Dist: make(DistMap, g.V),
-		K:    k,
-		T:    t,
+		G:        g,
+		Dist:     make(DistMap, g.V),
+		K:        k,
+		T:        t,
+		bufInt:   make([]int, 0, 1000),
+		bufItem:  make([]ds.Item, 0, 1000),
+		bufBatch: make([]ds.Item, 0, 1000),
 	}
 }
 
@@ -146,10 +154,17 @@ func (s *Solver) processMainLoop(l int, B float64, D *ds.DataStructure, W []int)
 // pullAndExtract pulls items from data structure and extracts keys
 func (s *Solver) pullAndExtract(D *ds.DataStructure) ([]int, float64) {
 	items, Bi := D.Pull()
-	Si := make([]int, len(items))
-	for idx, item := range items {
-		Si[idx] = item.Key
+	// Reuse buffer
+	s.bufInt = s.bufInt[:0]
+	if cap(s.bufInt) < len(items) {
+		s.bufInt = make([]int, 0, len(items)*2)
 	}
+	for _, item := range items {
+		s.bufInt = append(s.bufInt, item.Key)
+	}
+	// Make a copy to return (bufInt will be reused)
+	Si := make([]int, len(s.bufInt))
+	copy(Si, s.bufInt)
 	return Si, Bi
 }
 
@@ -185,16 +200,21 @@ func (s *Solver) relaxEdges(Ui []int, Bi, Bi_prime, B float64, D *ds.DataStructu
 
 // batchPrepend prepares and adds batch items to data structure
 func (s *Solver) batchPrepend(D *ds.DataStructure, K []ds.Item, Si []int, Bi_prime, Bi float64) {
-	batch := make([]ds.Item, 0, len(K)+len(Si))
-	batch = append(batch, K...)
+	// Reuse batch buffer
+	s.bufBatch = s.bufBatch[:0]
+	if cap(s.bufBatch) < len(K)+len(Si) {
+		s.bufBatch = make([]ds.Item, 0, (len(K)+len(Si))*2)
+	}
+
+	s.bufBatch = append(s.bufBatch, K...)
 
 	for _, x := range Si {
 		if s.Dist[x] >= Bi_prime && s.Dist[x] < Bi {
-			batch = append(batch, ds.Item{Key: x, Value: s.Dist[x]})
+			s.bufBatch = append(s.bufBatch, ds.Item{Key: x, Value: s.Dist[x]})
 		}
 	}
 
-	D.BatchPrepend(batch)
+	D.BatchPrepend(s.bufBatch)
 }
 
 // buildFinalSet constructs the final vertex set with filtering
