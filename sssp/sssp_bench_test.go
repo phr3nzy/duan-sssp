@@ -1,6 +1,7 @@
 package sssp
 
 import (
+	"container/heap"
 	"fmt"
 	"math/rand"
 	"testing"
@@ -134,7 +135,7 @@ func BenchmarkBaseCase(b *testing.B) {
 	}
 }
 
-// BenchmarkComparison compares with naive Dijkstra
+// BenchmarkComparison compares different SSSP algorithms
 func BenchmarkComparison(b *testing.B) {
 	vertices := 10000
 	edges := 30000
@@ -150,6 +151,15 @@ func BenchmarkComparison(b *testing.B) {
 		}
 	})
 
+	b.Run("AStar", func(b *testing.B) {
+		g := generateRandomGraph(vertices, edges)
+
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			aStarSSP(g, 0)
+		}
+	})
+
 	b.Run("NaiveDijkstra", func(b *testing.B) {
 		g := generateRandomGraph(vertices, edges)
 
@@ -158,6 +168,43 @@ func BenchmarkComparison(b *testing.B) {
 			naiveDijkstra(g, 0)
 		}
 	})
+}
+
+// BenchmarkAlgorithmComparison provides detailed size-based comparison
+func BenchmarkAlgorithmComparison(b *testing.B) {
+	sizes := []struct {
+		name     string
+		vertices int
+		edges    int
+	}{
+		{"Small_V1K_E3K", 1000, 3000},
+		{"Medium_V5K_E15K", 5000, 15000},
+		{"Large_V10K_E30K", 10000, 30000},
+	}
+
+	for _, sz := range sizes {
+		b.Run(sz.name, func(b *testing.B) {
+			b.Run("Duan", func(b *testing.B) {
+				g := generateRandomGraph(sz.vertices, sz.edges)
+				tg := g.ToConstantDegree()
+				solver := NewSolver(tg.G)
+
+				b.ResetTimer()
+				for i := 0; i < b.N; i++ {
+					solver.Run(tg.OriginalTo[0])
+				}
+			})
+
+			b.Run("AStar", func(b *testing.B) {
+				g := generateRandomGraph(sz.vertices, sz.edges)
+
+				b.ResetTimer()
+				for i := 0; i < b.N; i++ {
+					aStarSSP(g, 0)
+				}
+			})
+		})
+	}
 }
 
 // Helper function to generate random graphs
@@ -211,6 +258,99 @@ func naiveDijkstra(g *graph.Graph, source int) []float64 {
 			w := edge.Weight
 			if dist[u]+w < dist[v] {
 				dist[v] = dist[u] + w
+			}
+		}
+	}
+
+	return dist
+}
+
+// aStarNode represents a node in A* priority queue
+type aStarNode struct {
+	vertex int
+	gScore float64 // Distance from source
+	fScore float64 // gScore + heuristic
+	index  int
+}
+
+type aStarPQ []*aStarNode
+
+func (pq aStarPQ) Len() int           { return len(pq) }
+func (pq aStarPQ) Less(i, j int) bool { return pq[i].fScore < pq[j].fScore }
+func (pq aStarPQ) Swap(i, j int) {
+	pq[i], pq[j] = pq[j], pq[i]
+	pq[i].index = i
+	pq[j].index = j
+}
+func (pq *aStarPQ) Push(x interface{}) {
+	n := len(*pq)
+	node := x.(*aStarNode)
+	node.index = n
+	*pq = append(*pq, node)
+}
+func (pq *aStarPQ) Pop() interface{} {
+	old := *pq
+	n := len(old)
+	node := old[n-1]
+	old[n-1] = nil
+	node.index = -1
+	*pq = old[0 : n-1]
+	return node
+}
+
+// aStarSSP implements A* algorithm for single-source shortest paths
+// Uses zero heuristic (h(v) = 0), which makes it equivalent to Dijkstra with heap
+// but demonstrates A* structure for comparison
+func aStarSSP(g *graph.Graph, source int) []float64 {
+	dist := make([]float64, g.V)
+	for i := range dist {
+		dist[i] = Infinity
+	}
+	dist[source] = 0
+
+	// Priority queue ordered by f-score
+	pq := &aStarPQ{}
+	heap.Init(pq)
+	heap.Push(pq, &aStarNode{
+		vertex: source,
+		gScore: 0,
+		fScore: 0, // 0 + heuristic(source)
+	})
+
+	visited := make([]bool, g.V)
+
+	for pq.Len() > 0 {
+		current := heap.Pop(pq).(*aStarNode)
+		u := current.vertex
+
+		// Skip if already processed
+		if visited[u] {
+			continue
+		}
+		visited[u] = true
+
+		// Skip if this is a stale entry
+		if current.gScore > dist[u] {
+			continue
+		}
+
+		// Relax edges
+		for _, edge := range g.Adj[u] {
+			v := edge.To
+			w := edge.Weight
+
+			if dist[u]+w < dist[v] {
+				dist[v] = dist[u] + w
+
+				// Heuristic: h(v) = 0 (admissible, consistent)
+				// For a real application, this could be Euclidean distance to target
+				heuristic := 0.0
+
+				heap.Push(pq, &aStarNode{
+					vertex: v,
+					gScore: dist[v],
+					fScore: dist[v] + heuristic,
+				})
 			}
 		}
 	}

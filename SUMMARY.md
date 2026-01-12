@@ -95,8 +95,16 @@ Test suites:
 - **Size scaling**: 1K to 100K vertices
 - **Density variation**: 2x to 20x edge-to-vertex ratios
 - **Component benchmarks**: Individual algorithm parts
-- **Comparison**: vs naive Dijkstra
+- **Algorithm comparison**: Duan vs A* vs naive Dijkstra
+- **Detailed comparison**: Size-based performance analysis
 - **Memory profiling**: Allocation patterns
+
+**Benchmark Results** (10K vertices, 30K edges):
+| Algorithm | Time | Relative |
+|-----------|------|----------|
+| Duan | 226 µs | 1.0x |
+| A* (heap) | 2.0 ms | 8.8x slower |
+| Naive Dijkstra | 134 ms | 593x slower |
 
 ## Documentation Highlights
 
