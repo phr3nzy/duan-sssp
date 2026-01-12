@@ -1,0 +1,56 @@
+# Binaries for programs and plugins
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Test binary, built with `go test -c`
+*.test
+
+# Output of the go coverage tool
+*.out
+coverage.txt
+coverage.html
+
+# Go workspace file
+go.work
+go.work.sum
+
+# Dependency directories (remove the comment below to include it)
+# vendor/
+
+# Go build cache
+.cache/
+
+# IDE and editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Compiled binary
+duan-sssp
+
+# Benchmark results
+*.bench
+benchmark_results.txt
+cpu.prof
+mem.prof
+*.prof
+
+# Test artifacts
+_testmain.go
+
+# Cursor/AI artifacts
+.cursor/
+
+# Temporary files
+*.tmp
+*.temp
+
+# OS files
+Thumbs.db
+.Trash-*

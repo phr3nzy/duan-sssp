@@ -1,0 +1,28 @@
+# Auto detect text files and normalize line endings
+* text=auto
+
+# Go source files
+*.go text diff=go
+
+# Documentation
+*.md text
+*.txt text
+
+# Scripts
+*.sh text eol=lf
+*.bash text eol=lf
+
+# Binary files
+*.exe binary
+*.dll binary
+*.so binary
+*.dylib binary
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.pdf binary
+
+# GitHub linguist
+*.go linguist-language=Go
+*.md linguist-documentation

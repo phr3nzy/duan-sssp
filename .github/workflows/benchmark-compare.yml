@@ -1,0 +1,63 @@
+name: Benchmark Comparison
+
+on:
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  benchmark-compare:
+    name: Compare Benchmarks
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout PR branch
+      uses: actions/checkout@v4
+      with:
+        ref: ${{ github.event.pull_request.head.sha }}
+
+    - name: Set up Go
+      uses: actions/setup-go@v5
+      with:
+        go-version: '1.22'
+
+    - name: Run benchmarks on PR branch
+      run: |
+        go test -bench=. -benchmem -benchtime=10x ./sssp/ > pr_bench.txt 2>&1 || true
+        cat pr_bench.txt
+
+    - name: Checkout base branch
+      uses: actions/checkout@v4
+      with:
+        ref: ${{ github.event.pull_request.base.sha }}
+
+    - name: Run benchmarks on base branch
+      run: |
+        go test -bench=. -benchmem -benchtime=10x ./sssp/ > base_bench.txt 2>&1 || true
+        cat base_bench.txt
+
+    - name: Install benchstat
+      run: go install golang.org/x/perf/cmd/benchstat@latest
+
+    - name: Compare benchmarks
+      run: |
+        ~/go/bin/benchstat base_bench.txt pr_bench.txt > comparison.txt || true
+        cat comparison.txt
+
+    - name: Comment comparison on PR
+      uses: actions/github-script@v7
+      with:
+        script: |
+          const fs = require('fs');
+          let comparison = 'Benchmark comparison not available';
+          try {
+            comparison = fs.readFileSync('comparison.txt', 'utf8');
+          } catch (e) {
+            comparison = 'Could not generate benchmark comparison';
+          }
+          github.rest.issues.createComment({
+            issue_number: context.issue.number,
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            body: '### Benchmark Comparison (PR vs Base)\n\n```\n' + comparison + '\n```\n\n*Note: Positive percentages indicate performance regression, negative indicate improvement.*'
+          });
+      continue-on-error: true
