@@ -91,232 +91,200 @@ func (s *Solver) Run(source int) []float64 {
 
 // BMSSP (Bounded Multi-Source Shortest Path) - Algorithm 3
 func (s *Solver) BMSSP(l int, B float64, S []int) (float64, []int) {
-	// Base Case
 	if l == 0 {
-		// In base case, S is singleton {x} (Lemma 3.7 proof implies decomposition, but algo 3 line 1 says check l=0)
-		// Wait, Algorithm 3 Line 2 checks l=0.
-		// If l=0, S should be small? The paper says "S is a singleton".
-		// But in recursion we might pass a set S_i.
-		// However, the paper implies we reduce down to base cases.
-		// If S is not singleton here, we iterate?
-		// Actually, standard BaseCase takes a set S? Algorithm 2 signature: BASECASE(B, S).
-		// Requirement 1 of BaseCase: S={x}.
-		// So if we reach l=0 with |S| > 1, we must have split it?
-		// No, the recursion structure ensures |S| reduces.
-		// Actually, at l=0, we just run mini-Dijkstra from ALL sources in S?
-		// Let's assume S is handled by running BaseCase on the single source, or we iterate.
-		// Algorithm 3 calls BASECASE(B,S) directly. Algorithm 2 expects singleton.
-		// Implication: At level 0, |S| is small enough or just 1.
-		// Let's implement BaseCase to handle set S generally (Multi-source Dijkstra) to be safe.
 		return s.BaseCase(B, S)
 	}
 
-	// 1. Find Pivots
 	P, W := s.FindPivots(B, S)
 
-	// 2. Initialize DS
-	// M = 2^((l-1)t)
-	pow := math.Pow(2, float64((l-1)*s.T))
-	M := int(pow)
+	if len(P) == 0 {
+		return s.finalizeBMSSP(B, W, make(map[int]bool))
+	}
+
+	D := s.initializeDataStructure(l, P)
+	U, _ := s.processMainLoop(l, B, D, W)
+
+	return s.finalizeBMSSP(B, W, U)
+}
+
+// initializeDataStructure creates and populates the data structure for BMSSP
+func (s *Solver) initializeDataStructure(l int, P []int) *ds.DataStructure {
+	M := int(math.Pow(2, float64((l-1)*s.T)))
 	if M < 1 {
 		M = 1
 	}
 
 	D := ds.NewDataStructure(M)
-
-	// Insert P into D
 	for _, x := range P {
 		D.Insert(x, s.Dist[x])
 	}
 
-	// 3. Loop
-	U := make(map[int]bool) // Using map for set U
-	if len(P) > 0 {
-		minP := Infinity
-		for _, x := range P {
-			if s.Dist[x] < minP {
-				minP = s.Dist[x]
+	return D
+}
+
+// processMainLoop handles the main iteration loop of BMSSP
+func (s *Solver) processMainLoop(l int, B float64, D *ds.DataStructure, W []int) (map[int]bool, int) {
+	U := make(map[int]bool)
+	limit := s.K * int(math.Pow(2, float64(l*s.T)))
+
+	for len(U) < limit && D.Count > 0 {
+		Si, Bi := s.pullAndExtract(D)
+		Bi_prime, Ui := s.BMSSP(l-1, Bi, Si)
+
+		s.addToSet(U, Ui)
+		K := s.relaxEdges(Ui, Bi, Bi_prime, B, D)
+		s.batchPrepend(D, K, Si, Bi_prime, Bi)
+
+		if len(U) > limit {
+			return s.buildFinalSet(U, W, Bi_prime), limit
+		}
+	}
+
+	return U, limit
+}
+
+// pullAndExtract pulls items from data structure and extracts keys
+func (s *Solver) pullAndExtract(D *ds.DataStructure) ([]int, float64) {
+	items, Bi := D.Pull()
+	Si := make([]int, len(items))
+	for idx, item := range items {
+		Si[idx] = item.Key
+	}
+	return Si, Bi
+}
+
+// addToSet adds elements from Ui to U
+func (s *Solver) addToSet(U map[int]bool, Ui []int) {
+	for _, u := range Ui {
+		U[u] = true
+	}
+}
+
+// relaxEdges performs edge relaxation and returns items for batch prepend
+func (s *Solver) relaxEdges(Ui []int, Bi, Bi_prime, B float64, D *ds.DataStructure) []ds.Item {
+	var K []ds.Item
+
+	for _, u := range Ui {
+		for _, edge := range s.G.Adj[u] {
+			newDist := s.Dist[u] + edge.Weight
+
+			if newDist <= s.Dist[edge.To] {
+				s.Dist[edge.To] = newDist
+
+				if newDist >= Bi && newDist < B {
+					D.Insert(edge.To, newDist)
+				} else if newDist >= Bi_prime && newDist < Bi {
+					K = append(K, ds.Item{Key: edge.To, Value: newDist})
+				}
 			}
 		}
+	}
 
-		limit := s.K * int(math.Pow(2, float64(l*s.T))) // k * 2^(lt)
+	return K
+}
 
-		for len(U) < limit && D.Count > 0 {
-			// Pull
-			Si_items, Bi := D.Pull()
-			Si := make([]int, len(Si_items))
-			for idx, item := range Si_items {
-				Si[idx] = item.Key
-			}
+// batchPrepend prepares and adds batch items to data structure
+func (s *Solver) batchPrepend(D *ds.DataStructure, K []ds.Item, Si []int, Bi_prime, Bi float64) {
+	batch := make([]ds.Item, 0, len(K)+len(Si))
+	batch = append(batch, K...)
 
-			// Recursive Call
-			Bi_prime, Ui := s.BMSSP(l-1, Bi, Si)
-
-			// Add Ui to U
-			for _, u := range Ui {
-				U[u] = true
-			}
-
-			// Relax edges from Ui
-			// K set for batch prepend
-			var K []ds.Item
-
-			for _, u := range Ui {
-				for _, edge := range s.G.Adj[u] {
-					v := edge.To
-					w := edge.Weight
-					newDist := s.Dist[u] + w
-
-					if newDist <= s.Dist[v] { // Relax
-						s.Dist[v] = newDist
-
-						// Insert logic
-						if newDist >= Bi && newDist < B {
-							D.Insert(v, newDist)
-						} else if newDist >= Bi_prime && newDist < Bi {
-							K = append(K, ds.Item{Key: v, Value: newDist})
-						}
-					}
-				}
-			}
-
-			// Batch Prepend K + specific Si
-			// "Batch Prepend all records in K and <x, d[x]> for x in Si with d[x] in [Bi_prime, Bi)"
-			var batch []ds.Item
-			batch = append(batch, K...)
-			for _, x := range Si {
-				if s.Dist[x] >= Bi_prime && s.Dist[x] < Bi {
-					batch = append(batch, ds.Item{Key: x, Value: s.Dist[x]})
-				}
-			}
-			D.BatchPrepend(batch)
-
-			// Check large workload
-			if len(U) > limit {
-				B_final := Bi_prime
-				// Add W filtered
-				finalU := make([]int, 0, len(U))
-				for u := range U {
-					finalU = append(finalU, u)
-				}
-				for _, w := range W {
-					if s.Dist[w] < B_final {
-						if !U[w] {
-							finalU = append(finalU, w)
-						}
-					}
-				}
-				return B_final, finalU
-			}
+	for _, x := range Si {
+		if s.Dist[x] >= Bi_prime && s.Dist[x] < Bi {
+			batch = append(batch, ds.Item{Key: x, Value: s.Dist[x]})
 		}
+	}
 
-	} // close len(P)>0 guard
+	D.BatchPrepend(batch)
+}
 
-	// Successful execution
-	B_final := B
+// buildFinalSet constructs the final vertex set with filtering
+func (s *Solver) buildFinalSet(U map[int]bool, W []int, bound float64) map[int]bool {
+	for _, w := range W {
+		if s.Dist[w] < bound && !U[w] {
+			U[w] = true
+		}
+	}
+	return U
+}
 
-	// Add W filtered by B_final (which is B)
+// finalizeBMSSP converts the result set to final format
+func (s *Solver) finalizeBMSSP(B float64, W []int, U map[int]bool) (float64, []int) {
 	finalU := make([]int, 0, len(U))
 	for u := range U {
 		finalU = append(finalU, u)
 	}
+
 	for _, w := range W {
-		if s.Dist[w] < B_final {
-			if !U[w] {
-				finalU = append(finalU, w)
-			}
+		if s.Dist[w] < B && !U[w] {
+			finalU = append(finalU, w)
 		}
 	}
 
-	return B_final, finalU
+	return B, finalU
 }
 
 // FindPivots - Algorithm 1
 func (s *Solver) FindPivots(B float64, S []int) ([]int, []int) {
-	// Optimization: Use slices instead of maps for visited/sets
 	inW := make([]bool, s.G.V)
 	for _, x := range S {
 		inW[x] = true
 	}
 
-	Wi_prev := S
-	W_list := make([]int, len(S)) // Keep track of W as a list
+	W_list := make([]int, len(S))
 	copy(W_list, S)
 
 	// Relax k steps
+	W_list = s.relaxKSteps(B, S, inW, W_list)
+
+	// If W grew too large, return early
+	if len(W_list) > s.K*len(S) {
+		P := make([]int, len(S))
+		copy(P, S)
+		return P, W_list
+	}
+
+	// Compute pivots from tree sizes
+	P := s.computePivots(S, inW)
+	return P, W_list
+}
+
+// relaxKSteps performs k relaxation steps from source set
+func (s *Solver) relaxKSteps(B float64, S []int, inW []bool, W_list []int) []int {
+	Wi_prev := S
+
 	for i := 1; i <= s.K; i++ {
 		Wi := make([]int, 0)
+
 		for _, u := range Wi_prev {
 			for _, edge := range s.G.Adj[u] {
-				v := edge.To
-				w := edge.Weight
+				newDist := s.Dist[u] + edge.Weight
 
-				// Relax
-				if s.Dist[u]+w < s.Dist[v] { // Strict inequality for update
-					// Note: Paper says <= for validity, but < for update?
-					// Standard Dijkstra relaxes on <.
-					// However, we must allow equality to build the forest F later.
-					// We update if strictly better.
-					s.Dist[v] = s.Dist[u] + w
-					// Add to Wi if < B
-					if s.Dist[v] < B {
-						if !inW[v] {
-							Wi = append(Wi, v)
-							inW[v] = true
-							W_list = append(W_list, v)
-						}
+				if newDist < s.Dist[edge.To] {
+					s.Dist[edge.To] = newDist
+
+					if newDist < B && !inW[edge.To] {
+						Wi = append(Wi, edge.To)
+						inW[edge.To] = true
+						W_list = append(W_list, edge.To)
 					}
 				}
 			}
 		}
 
 		if len(W_list) > s.K*len(S) {
-			// Return P=S, W=W_list
-			P := make([]int, len(S))
-			copy(P, S)
-			return P, W_list
+			return W_list
 		}
 		Wi_prev = Wi
 	}
 
-	// Construct Forest F
-	// F is defined on W. We need to identify roots in S.
-	// Root logic: u is root if subtree size >= k.
+	return W_list
+}
 
-	// We compute size of tree rooted at u.
-	// Memoization: 0 = unvisited, -1 = being processed (cycle detection), positive = computed size
+// computePivots identifies pivots based on tree sizes
+func (s *Solver) computePivots(S []int, inW []bool) []int {
 	memoSize := make([]int, s.G.V)
 
-	var calcSize func(u int) int
-	calcSize = func(u int) int {
-		// Already computed
-		if memoSize[u] > 0 {
-			return memoSize[u]
-		}
-
-		// Cycle detection: if we encounter a node being processed, there's a cycle
-		// In a proper shortest path forest, this shouldn't happen, but handle it gracefully
-		if memoSize[u] == -1 {
-			return 1 // Treat as single node to avoid infinite recursion
-		}
-
-		// Mark as being processed
-		memoSize[u] = -1
-
-		count := 1
-		// Iterate outgoing edges in F
-		// Edge (u, v) is in F if u,v in W and dist[v] == dist[u] + w
-		for _, edge := range s.G.Adj[u] {
-			v := edge.To
-			if inW[v] && math.Abs(s.Dist[v]-(s.Dist[u]+edge.Weight)) < 1e-9 {
-				count += calcSize(v)
-			}
-		}
-
-		// Store computed size
-		memoSize[u] = count
-		return count
-	}
+	calcSize := s.makeTreeSizeCalculator(inW, memoSize)
 
 	P := make([]int, 0)
 	for _, u := range S {
@@ -325,7 +293,44 @@ func (s *Solver) FindPivots(B float64, S []int) ([]int, []int) {
 		}
 	}
 
-	return P, W_list
+	return P
+}
+
+// makeTreeSizeCalculator creates a function to calculate tree sizes with cycle detection
+func (s *Solver) makeTreeSizeCalculator(inW []bool, memoSize []int) func(int) int {
+	var calcSize func(u int) int
+
+	calcSize = func(u int) int {
+		if memoSize[u] > 0 {
+			return memoSize[u]
+		}
+
+		if memoSize[u] == -1 {
+			return 1 // Cycle detected
+		}
+
+		memoSize[u] = -1
+		count := 1 + s.countTreeChildren(u, inW, calcSize)
+		memoSize[u] = count
+
+		return count
+	}
+
+	return calcSize
+}
+
+// countTreeChildren counts children in the shortest path forest
+func (s *Solver) countTreeChildren(u int, inW []bool, calcSize func(int) int) int {
+	count := 0
+
+	for _, edge := range s.G.Adj[u] {
+		v := edge.To
+		if inW[v] && math.Abs(s.Dist[v]-(s.Dist[u]+edge.Weight)) < 1e-9 {
+			count += calcSize(v)
+		}
+	}
+
+	return count
 }
 
 // BaseCase - Algorithm 2
