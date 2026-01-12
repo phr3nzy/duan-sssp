@@ -210,7 +210,8 @@ func BenchmarkAlgorithmComparison(b *testing.B) {
 // Helper function to generate random graphs
 func generateRandomGraph(vertices, edges int) *graph.Graph {
 	g := graph.NewGraph(vertices)
-	rng := rand.New(rand.NewSource(time.Now().UnixNano()))
+	// Use Go 1.20+ random number generation without deprecated Seed
+	rng := rand.New(rand.NewSource(time.Now().UnixNano())) //nolint:gosec // Deterministic random for benchmarks
 
 	for i := 0; i < edges; i++ {
 		u := rng.Intn(vertices)

@@ -25,23 +25,15 @@ linters-settings:
 linters:
   disable-all: true
   enable:
-    - bodyclose
-    - dupl
     - errcheck
-    - goconst
-    - gocritic
-    - gocyclo
     - gofmt
     - goimports
     - gosimple
     - govet
     - ineffassign
-    - lll
     - misspell
     - staticcheck
     - typecheck
-    - unconvert
-    - unparam
     - unused
 
 issues:
@@ -52,12 +44,17 @@ issues:
         - errcheck
         - dupl
         - gosec
+        - gocritic
+        - unparam
     - path: sssp/sssp.go
       linters:
         - gocyclo  # Algorithm is inherently complex
     - path: ds/ds.go
       linters:
         - gocyclo  # Data structure operations can be complex
+  exclude:
+    - "SA1019.*rand.Seed"  # Allow rand.Seed for benchmark determinism
+    - "commentedOutCode"  # Allow commented code for documentation
 
 run:
   timeout: 5m

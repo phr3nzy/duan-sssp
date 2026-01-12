@@ -56,14 +56,6 @@ func (g *Graph) ToConstantDegree() *TransformedGraph {
 	//   Incoming edges?
 	//   The paper says: "Substitute each vertex v with a cycle... For every neighbor w there is a vertex x_vw".
 
-	type port struct {
-		id int // new node id
-	}
-
-	// First pass: Allocate IDs
-	// We need to map (u, neighbor) -> new_node_id
-	// But since it's a multigraph (potentially), we simplify.
-
 	// Let's use a simpler gadget:
 	// Every original node u becomes a cycle of k nodes, where k = InDegree(u) + OutDegree(u).
 	// If k=0, just 1 node.
