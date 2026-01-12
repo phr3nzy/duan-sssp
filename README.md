@@ -142,19 +142,44 @@ func main() {
 
 ## 🧪 Benchmarks
 
-Run the comprehensive benchmark suite:
+### Visual Benchmark Tool (Recommended!)
+
+**Use all your CPU cores with interactive visualization:**
+
+```bash
+# Build the tool
+make visualbench
+
+# Run with visualization (uses all 28 cores!)
+make visual-web
+```
+
+Or manually:
+```bash
+./visualbench \
+  -vertices=10000 \
+  -edge-factor=3 \
+  -iterations=10 \
+  -parallel=true \
+  -web=true
+```
+
+This will:
+- ✅ Use ALL your CPU cores
+- ✅ Show graph visualization
+- ✅ Display algorithm running in real-time
+- ✅ Open interactive web dashboard
+- ✅ Compare Duan vs A* vs Parallel performance
+
+**See [cmd/visualbench/README.md](cmd/visualbench/README.md) for more options.**
+
+### Standard Benchmark Suite
 
 ```bash
 # Run all benchmarks
 go test -bench=. -benchmem ./sssp/
 
-# Run specific benchmark
-go test -bench=BenchmarkSSSP ./sssp/
-
-# Run scalability tests
-go test -bench=BenchmarkScalability ./sssp/
-
-# Compare with naive Dijkstra
+# Run algorithm comparison
 go test -bench=BenchmarkComparison ./sssp/
 
 # Test basic execution

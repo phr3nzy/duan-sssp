@@ -22,7 +22,7 @@ jobs:
 
     - name: Run benchmarks on PR branch
       run: |
-        go test -bench=. -benchmem -benchtime=10x ./sssp/ > pr_bench.txt 2>&1 || true
+        go test -bench=. -benchmem -benchtime=3x -timeout=5m ./sssp/ > pr_bench.txt 2>&1 || true
         cat pr_bench.txt
 
     - name: Checkout base branch
@@ -32,7 +32,7 @@ jobs:
 
     - name: Run benchmarks on base branch
       run: |
-        go test -bench=. -benchmem -benchtime=10x ./sssp/ > base_bench.txt 2>&1 || true
+        go test -bench=. -benchmem -benchtime=3x -timeout=5m ./sssp/ > base_bench.txt 2>&1 || true
         cat base_bench.txt
 
     - name: Install benchstat

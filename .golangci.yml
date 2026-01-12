@@ -57,5 +57,10 @@ issues:
     - "commentedOutCode"  # Allow commented code for documentation
 
 run:
-  timeout: 5m
-  tests: true
+  timeout: 10m
+  tests: false  # Don't run tests during linting
+  skip-dirs:
+    - cmd/visualbench
+
+output:
+  format: colored-line-number

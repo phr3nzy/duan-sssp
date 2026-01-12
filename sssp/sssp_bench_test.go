@@ -93,44 +93,46 @@ func BenchmarkTransformation(b *testing.B) {
 
 // BenchmarkFindPivots benchmarks the pivot finding algorithm
 func BenchmarkFindPivots(b *testing.B) {
-	vertices := 10000
-	edges := 30000
+	vertices := 1000 // Reduced size to prevent long-running benchmark
+	edges := 3000
 	g := generateRandomGraph(vertices, edges)
 	tg := g.ToConstantDegree()
-	solver := NewSolver(tg.G)
-
-	// Initialize distances
-	for i := range solver.Dist {
-		solver.Dist[i] = Infinity
-	}
-	solver.Dist[0] = 0
-
-	S := []int{0}
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
+		b.StopTimer()
+		// Create fresh solver for each iteration to avoid state pollution
+		solver := NewSolver(tg.G)
+		for j := range solver.Dist {
+			solver.Dist[j] = Infinity
+		}
+		solver.Dist[0] = 0
+		S := []int{0}
+		b.StartTimer()
+
 		solver.FindPivots(Infinity, S)
 	}
 }
 
 // BenchmarkBaseCase benchmarks the base case algorithm
 func BenchmarkBaseCase(b *testing.B) {
-	vertices := 10000
-	edges := 30000
+	vertices := 100 // Small size for isolated base case testing
+	edges := 300
 	g := generateRandomGraph(vertices, edges)
 	tg := g.ToConstantDegree()
-	solver := NewSolver(tg.G)
-
-	// Initialize distances
-	for i := range solver.Dist {
-		solver.Dist[i] = Infinity
-	}
-	solver.Dist[0] = 0
-
-	S := []int{0}
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
+		b.StopTimer()
+		// Create fresh solver for each iteration to avoid state pollution
+		solver := NewSolver(tg.G)
+		for j := range solver.Dist {
+			solver.Dist[j] = Infinity
+		}
+		solver.Dist[0] = 0
+		S := []int{0}
+		b.StartTimer()
+
 		solver.BaseCase(Infinity, S)
 	}
 }
