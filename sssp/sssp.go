@@ -3,6 +3,8 @@ package sssp
 import (
 	"container/heap"
 	"math"
+	"runtime"
+	"sync"
 
 	"github.com/phr3nzy/duan-sssp/ds"
 	"github.com/phr3nzy/duan-sssp/graph"
@@ -51,6 +53,13 @@ type Solver struct {
 	bufInt   []int
 	bufItem  []ds.Item
 	bufBatch []ds.Item
+
+	// Parallel processing
+	workerPool chan struct{}
+	numWorkers int
+
+	// Event listener for visualization
+	listener EventListener
 }
 
 func NewSolver(g *graph.Graph) *Solver {
@@ -68,14 +77,31 @@ func NewSolver(g *graph.Graph) *Solver {
 		t = 2
 	}
 
+	numWorkers := runtime.NumCPU()
+	if numWorkers > 8 {
+		numWorkers = 8 // Cap to avoid excessive contention
+	}
+
 	return &Solver{
-		G:        g,
-		Dist:     make(DistMap, g.V),
-		K:        k,
-		T:        t,
-		bufInt:   make([]int, 0, 1000),
-		bufItem:  make([]ds.Item, 0, 1000),
-		bufBatch: make([]ds.Item, 0, 1000),
+		G:          g,
+		Dist:       make(DistMap, g.V),
+		K:          k,
+		T:          t,
+		bufInt:     make([]int, 0, 1000),
+		bufItem:    make([]ds.Item, 0, 1000),
+		bufBatch:   make([]ds.Item, 0, 1000),
+		workerPool: make(chan struct{}, numWorkers),
+		numWorkers: numWorkers,
+		listener:   &NoOpListener{},
+	}
+}
+
+// SetEventListener sets the event listener for visualization
+func (s *Solver) SetEventListener(listener EventListener) {
+	if listener != nil {
+		s.listener = listener
+	} else {
+		s.listener = &NoOpListener{}
 	}
 }
 
@@ -84,6 +110,7 @@ func (s *Solver) Run(source int) []float64 {
 		s.Dist[i] = Infinity
 	}
 	s.Dist[source] = 0
+	s.listener.OnNodeDiscovered(source, 0)
 
 	// Calculate Max Level l = ceil(log n / t)
 	n := float64(s.G.V)
@@ -92,6 +119,7 @@ func (s *Solver) Run(source int) []float64 {
 	// Initial call
 	// S = {source}, B = Infinity
 	S := []int{source}
+	s.listener.OnPhaseChange("BMSSP", l)
 	s.BMSSP(l, Infinity, S)
 
 	return s.Dist
@@ -99,10 +127,14 @@ func (s *Solver) Run(source int) []float64 {
 
 // BMSSP (Bounded Multi-Source Shortest Path) - Algorithm 3
 func (s *Solver) BMSSP(l int, B float64, S []int) (float64, []int) {
+	s.listener.OnPhaseChange("BMSSP", l)
+
 	if l == 0 {
+		s.listener.OnPhaseChange("BaseCase", 0)
 		return s.BaseCase(B, S)
 	}
 
+	s.listener.OnPhaseChange("FindPivots", l)
 	P, W := s.FindPivots(B, S)
 
 	if len(P) == 0 {
@@ -154,17 +186,11 @@ func (s *Solver) processMainLoop(l int, B float64, D *ds.DataStructure, W []int)
 // pullAndExtract pulls items from data structure and extracts keys
 func (s *Solver) pullAndExtract(D *ds.DataStructure) ([]int, float64) {
 	items, Bi := D.Pull()
-	// Reuse buffer
-	s.bufInt = s.bufInt[:0]
-	if cap(s.bufInt) < len(items) {
-		s.bufInt = make([]int, 0, len(items)*2)
+	// Return slice directly without copying - caller shouldn't modify
+	Si := make([]int, len(items))
+	for i, item := range items {
+		Si[i] = item.Key
 	}
-	for _, item := range items {
-		s.bufInt = append(s.bufInt, item.Key)
-	}
-	// Make a copy to return (bufInt will be reused)
-	Si := make([]int, len(s.bufInt))
-	copy(Si, s.bufInt)
 	return Si, Bi
 }
 
@@ -177,6 +203,20 @@ func (s *Solver) addToSet(U map[int]bool, Ui []int) {
 
 // relaxEdges performs edge relaxation and returns items for batch prepend
 func (s *Solver) relaxEdges(Ui []int, Bi, Bi_prime, B float64, D *ds.DataStructure) []ds.Item {
+	if len(Ui) == 0 {
+		return nil
+	}
+
+	// For small workloads, use sequential processing
+	if len(Ui) <= 4 || s.numWorkers == 1 {
+		return s.relaxEdgesSequential(Ui, Bi, Bi_prime, B, D)
+	}
+
+	return s.relaxEdgesParallel(Ui, Bi, Bi_prime, B, D)
+}
+
+// relaxEdgesSequential processes edges sequentially
+func (s *Solver) relaxEdgesSequential(Ui []int, Bi, Bi_prime, B float64, D *ds.DataStructure) []ds.Item {
 	var K []ds.Item
 
 	for _, u := range Ui {
@@ -184,7 +224,14 @@ func (s *Solver) relaxEdges(Ui []int, Bi, Bi_prime, B float64, D *ds.DataStructu
 			newDist := s.Dist[u] + edge.Weight
 
 			if newDist <= s.Dist[edge.To] {
+				oldDist := s.Dist[edge.To]
 				s.Dist[edge.To] = newDist
+
+				if oldDist == Infinity {
+					s.listener.OnNodeDiscovered(edge.To, newDist)
+				} else {
+					s.listener.OnNodeRelaxed(u, edge.To, oldDist, newDist)
+				}
 
 				if newDist >= Bi && newDist < B {
 					D.Insert(edge.To, newDist)
@@ -196,6 +243,53 @@ func (s *Solver) relaxEdges(Ui []int, Bi, Bi_prime, B float64, D *ds.DataStructu
 	}
 
 	return K
+}
+
+// relaxEdgesParallel processes edges in parallel using worker pool
+func (s *Solver) relaxEdgesParallel(Ui []int, Bi, Bi_prime, B float64, D *ds.DataStructure) []ds.Item {
+	var wg sync.WaitGroup
+	results := make([][]ds.Item, len(Ui))
+
+	// Process each vertex in parallel
+	for i, u := range Ui {
+		wg.Add(1)
+		go func(vertexIdx, vertex int) {
+			defer wg.Done()
+
+			var localK []ds.Item
+			for _, edge := range s.G.Adj[vertex] {
+				newDist := s.Dist[vertex] + edge.Weight
+
+				if newDist <= s.Dist[edge.To] {
+					oldDist := s.Dist[edge.To]
+					s.Dist[edge.To] = newDist
+
+					if oldDist == Infinity {
+						s.listener.OnNodeDiscovered(edge.To, newDist)
+					} else {
+						s.listener.OnNodeRelaxed(vertex, edge.To, oldDist, newDist)
+					}
+
+					if newDist >= Bi && newDist < B {
+						D.Insert(edge.To, newDist)
+					} else if newDist >= Bi_prime && newDist < Bi {
+						localK = append(localK, ds.Item{Key: edge.To, Value: newDist})
+					}
+				}
+			}
+			results[vertexIdx] = localK
+		}(i, u)
+	}
+
+	wg.Wait()
+
+	// Merge results
+	var totalK []ds.Item
+	for _, k := range results {
+		totalK = append(totalK, k...)
+	}
+
+	return totalK
 }
 
 // batchPrepend prepares and adds batch items to data structure
@@ -280,7 +374,14 @@ func (s *Solver) relaxKSteps(B float64, S []int, inW []bool, W_list []int) []int
 				newDist := s.Dist[u] + edge.Weight
 
 				if newDist < s.Dist[edge.To] {
+					oldDist := s.Dist[edge.To]
 					s.Dist[edge.To] = newDist
+
+					if oldDist == Infinity {
+						s.listener.OnNodeDiscovered(edge.To, newDist)
+					} else {
+						s.listener.OnNodeRelaxed(u, edge.To, oldDist, newDist)
+					}
 
 					if newDist < B && !inW[edge.To] {
 						Wi = append(Wi, edge.To)
@@ -376,12 +477,21 @@ func (s *Solver) BaseCase(B float64, S []int) (float64, []int) {
 		}
 
 		U0[u] = true // Add to set
+		s.listener.OnIterationComplete(len(U0))
 
 		for _, edge := range s.G.Adj[u] {
 			v := edge.To
 			w := edge.Weight
 			if s.Dist[u]+w <= s.Dist[v] && s.Dist[u]+w < B {
+				oldDist := s.Dist[v]
 				s.Dist[v] = s.Dist[u] + w
+
+				if oldDist == Infinity {
+					s.listener.OnNodeDiscovered(v, s.Dist[v])
+				} else {
+					s.listener.OnNodeRelaxed(u, v, oldDist, s.Dist[v])
+				}
+
 				heap.Push(pq, &PQItem{u: v, priority: s.Dist[v]})
 			}
 		}

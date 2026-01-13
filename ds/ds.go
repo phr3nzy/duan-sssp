@@ -3,9 +3,32 @@ package ds
 import (
 	"math"
 	"sort"
+	"sync"
 )
 
 const Infinity = math.MaxFloat64
+
+// BlockPool for reusing blocks and reducing allocations
+var blockPool = sync.Pool{
+	New: func() interface{} {
+		return &block{}
+	},
+}
+
+// GetBlock retrieves a block from the pool
+func GetBlock() *block {
+	return blockPool.Get().(*block)
+}
+
+// PutBlock returns a block to the pool after resetting
+func PutBlock(b *block) {
+	b.head = nil
+	b.tail = nil
+	b.size = 0
+	b.upperBound = 0
+	b.sorted = false
+	blockPool.Put(b)
+}
 
 // Item represents a key-value pair in the frontier.
 type Item struct {
@@ -20,6 +43,7 @@ type block struct {
 	tail       *Item
 	size       int
 	upperBound float64 // Max value in this block (for the BST/Index)
+	sorted     bool    // Track if block is already sorted
 }
 
 // DataStructure implements the block-based priority queue (Lemma 3.3).
@@ -62,8 +86,9 @@ func (ds *DataStructure) Insert(key int, val float64) {
 		// No block fits, or D1 is empty.
 		// If D1 is empty, create new.
 		if len(ds.d1) == 0 {
-			b := newBlock()
+			b := GetBlock()
 			b.upperBound = Infinity // The last block always stretches to Infinity/B
+			b.sorted = true
 			ds.d1 = append(ds.d1, b)
 			idx = 0
 		} else {
@@ -77,17 +102,13 @@ func (ds *DataStructure) Insert(key int, val float64) {
 	targetBlock := ds.d1[idx]
 
 	// 2. Insert into the linked list of targetBlock (O(1))
-	// Note: The paper assumes blocks are sorted internally?
-	// Lemma 3.3 Proof: "Blocks are maintained in the sorted order... for any two pairs... in Bi and Bj... b1 <= b2".
-	// It does NOT explicitly say items *within* a block are sorted, but Split relies on finding the median.
-	// If we don't sort internal items, finding median is O(M). Inserting is O(1).
-	// We append to head for O(1).
 	item.next = targetBlock.head
 	targetBlock.head = item
 	if targetBlock.tail == nil {
 		targetBlock.tail = item
 	}
 	targetBlock.size++
+	targetBlock.sorted = false // Mark as unsorted after insertion
 
 	// 3. Split if too big
 	if targetBlock.size > ds.M {
@@ -115,7 +136,8 @@ func (ds *DataStructure) BatchPrepend(items []Item) {
 		}
 
 		chunk := items[i:end]
-		blk := newBlock()
+		blk := GetBlock()
+		blk.sorted = true // Batch items are pre-sorted
 		// Convert chunk to linked list
 		for k := range chunk {
 			itm := &Item{Key: chunk[k].Key, Value: chunk[k].Value}
@@ -170,6 +192,8 @@ func (ds *DataStructure) Pull() ([]Item, float64) {
 		}
 		if blk.size > 0 {
 			activeD0 = append(activeD0, blk)
+		} else {
+			PutBlock(blk) // Return empty block to pool
 		}
 	}
 	ds.d0 = activeD0
@@ -179,16 +203,17 @@ func (ds *DataStructure) Pull() ([]Item, float64) {
 		activeD1 := ds.d1[:0]
 		for _, blk := range ds.d1 {
 			if len(collected) < ds.M {
-				// Sort the block to extract smallest?
-				// The items inside aren't guaranteed sorted by Insert, only partitioned.
-				// We must sort the block content to pull correctly if we partially drain it.
-				// Cost: O(M log M). Allowable since pull is amortized.
-				ds.sortBlock(blk)
+				// Sort the block only if not already sorted
+				if !blk.sorted {
+					ds.sortBlock(blk)
+				}
 				drain(blk, ds.M)
 			}
 			if blk.size > 0 {
 				// Update UB if needed, or keep
 				activeD1 = append(activeD1, blk)
+			} else {
+				PutBlock(blk) // Return empty block to pool
 			}
 		}
 		ds.d1 = activeD1
@@ -205,16 +230,14 @@ func (ds *DataStructure) Pull() ([]Item, float64) {
 			// scan d0
 			Bi = ds.peekBlock(ds.d0[0])
 		} else if len(ds.d1) > 0 {
-			ds.sortBlock(ds.d1[0]) // Ensure sorted to peek
+			if !ds.d1[0].sorted {
+				ds.sortBlock(ds.d1[0]) // Ensure sorted to peek
+			}
 			Bi = ds.peekBlock(ds.d1[0])
 		}
 	}
 
 	return collected, Bi
-}
-
-func newBlock() *block {
-	return &block{}
 }
 
 func (ds *DataStructure) split(d1Index int) {
@@ -236,9 +259,11 @@ func (ds *DataStructure) split(d1Index int) {
 	mid := len(items) / 2
 
 	// Create new block for right half
-	newB := newBlock()
+	newB := GetBlock()
+	newB.sorted = true
 	newB.upperBound = b.upperBound    // Inherits old UB
 	b.upperBound = items[mid-1].Value // New UB for left block
+	b.sorted = true                   // Both halves are now sorted
 
 	// Rebuild lists
 	b.head, b.tail, b.size = listFromSlice(items[:mid])
@@ -249,7 +274,8 @@ func (ds *DataStructure) split(d1Index int) {
 }
 
 func (ds *DataStructure) sortBlock(b *block) {
-	if b.size < 2 {
+	if b.sorted || b.size < 2 {
+		b.sorted = true
 		return
 	}
 	items := make([]*Item, 0, b.size)
@@ -262,6 +288,7 @@ func (ds *DataStructure) sortBlock(b *block) {
 		return items[i].Value < items[j].Value
 	})
 	b.head, b.tail, b.size = listFromSlice(items)
+	b.sorted = true
 }
 
 func listFromSlice(items []*Item) (*Item, *Item, int) {

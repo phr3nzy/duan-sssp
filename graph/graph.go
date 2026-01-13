@@ -131,8 +131,15 @@ func (g *Graph) ToConstantDegree() *TransformedGraph {
 }
 
 // MapDistances converts distances from the transformed graph back to the original.
-func (tg *TransformedGraph) MapDistances(dist []float64) []float64 {
-	res := make([]float64, len(tg.OriginalTo))
+// If target is provided with enough capacity, it will be reused to avoid allocation.
+func (tg *TransformedGraph) MapDistances(dist []float64, target ...[]float64) []float64 {
+	var res []float64
+	if len(target) > 0 && cap(target[0]) >= len(tg.OriginalTo) {
+		res = target[0][:len(tg.OriginalTo)]
+	} else {
+		res = make([]float64, len(tg.OriginalTo))
+	}
+
 	for i, startNode := range tg.OriginalTo {
 		// The distance to original node i is the min distance to any node in its cycle
 		// Or simply the distance to the "start" node of the cycle (since internal weights are 0)
